@@ -1,10 +1,16 @@
 # High Level architechture
 <img width="2778" height="2768" alt="mermaid-diagram (1)" src="https://github.com/user-attachments/assets/dc8cf26e-b203-4a5a-85fd-9579e5bfe69e" />
+
 # Rag Architecture
 <img width="2578" height="2272" alt="mermaid-diagram (5)" src="https://github.com/user-attachments/assets/350564dd-7729-400e-91e8-7ecec5d78451" />
+
 # Deployment diagram
 <img width="1416" height="1374" alt="mermaid-diagram (2)" src="https://github.com/user-attachments/assets/56e056dc-e564-4dad-bcb0-2acd24acdf3c" />
+
+# Component architechture
 <img width="3016" height="1194" alt="mermaid-diagram (4)" src="https://github.com/user-attachments/assets/6517c17c-dc59-426f-84a4-e28efadeb7ef" />
+
+# Database Schema
 <img width="3110" height="3336" alt="mermaid-diagram (3)" src="https://github.com/user-attachments/assets/0357199d-4168-4126-97da-073deb1a7beb" />
 
 
