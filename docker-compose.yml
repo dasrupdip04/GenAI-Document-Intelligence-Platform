@@ -1,30 +1,48 @@
 services:
-
   postgres:
     image: pgvector/pgvector:pg16
     container_name: genai-postgres
     restart: unless-stopped
-
     environment:
       POSTGRES_USER: app_user
       POSTGRES_PASSWORD: app_password
       POSTGRES_DB: document_intelligence
-
     ports:
       - "5432:5432"
-
     volumes:
       - postgres_data:/var/lib/postgresql/data
-
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "pg_isready -U app_user -d document_intelligence"
-        ]
+      test: ["CMD-SHELL", "pg_isready -U app_user -d document_intelligence"]
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 10s
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: genai-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://app_user:app_password@postgres:5432/document_intelligence
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_JWKS_URL: ${SUPABASE_JWKS_URL}
+      STORAGE_PATH: /app/storage/documents
+      MAX_UPLOAD_SIZE_MB: 10
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      GEMINI_EMBEDDING_MODEL: ${GEMINI_EMBEDDING_MODEL:-gemini-embedding-001}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-768}
+      LOG_LEVEL: INFO
+      ENVIRONMENT: development
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./storage:/app/storage
 
 volumes:
   postgres_data:
