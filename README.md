@@ -2,6 +2,92 @@
 
 > A production-oriented document intelligence platform for uploading documents, performing grounded conversational Q&A, retrieving relevant document context using vector search, and generating citation-backed answers with an LLM.
 
+
+flowchart TB
+
+    User["User"]
+
+    subgraph Frontend["Frontend"]
+        UI["React + TypeScript UI"]
+        Query["TanStack Query"]
+        AuthClient["Supabase Auth Client"]
+    end
+
+    subgraph Backend["FastAPI Backend"]
+        API["API / Route Layer"]
+        Auth["Authentication & Authorization"]
+
+        subgraph Services["Application Services"]
+            DocumentService["Document Service"]
+            IngestionService["Ingestion Service"]
+            Extraction["Document Extraction"]
+            Chunker["Recursive Chunker"]
+            RAG["RAG Service"]
+            Retrieval["Retrieval Service"]
+            Conversation["Conversation Service"]
+            UserService["User Service"]
+        end
+
+        subgraph Repositories["Repository Layer"]
+            DocumentRepo["Document Repository"]
+            UserRepo["User Repository"]
+            ConversationRepo["Conversation Repository"]
+        end
+
+        Provider["LLM / Embedding Provider"]
+    end
+
+    subgraph External["External Services"]
+        Supabase["Supabase Auth / Google OAuth"]
+        Gemini["Google Gemini API"]
+    end
+
+    subgraph Storage["Persistence"]
+        PostgreSQL["PostgreSQL 16"]
+        PGVector["pgvector"]
+        Files["Document Storage"]
+    end
+
+    User --> UI
+    UI --> Query
+    UI --> AuthClient
+
+    AuthClient --> Supabase
+    Query --> API
+
+    API --> Auth
+    Auth --> Supabase
+
+    API --> DocumentService
+    API --> Conversation
+    API --> RAG
+
+    DocumentService --> DocumentRepo
+    DocumentRepo --> PostgreSQL
+
+    DocumentService --> Files
+
+    IngestionService --> Extraction
+    Extraction --> Chunker
+    IngestionService --> Provider
+    IngestionService --> PostgreSQL
+    PostgreSQL --> PGVector
+
+    RAG --> Retrieval
+    Retrieval --> Provider
+    Retrieval --> PGVector
+
+    RAG --> Provider
+    Provider --> Gemini
+
+    Conversation --> ConversationRepo
+    ConversationRepo --> PostgreSQL
+
+    UserService --> UserRepo
+    UserRepo --> PostgreSQL
+
+
+    
 ---
 
 ## Table of Contents
@@ -68,6 +154,8 @@ Papertrail AI is a document intelligence platform that allows authenticated user
 The system is designed as a **modular monolith** rather than a collection of microservices. This keeps the architecture simple enough for development and deployment while maintaining clear separation between API, service, repository, provider, and persistence layers.
 
 ---
+
+
 
 # Key Features
 
