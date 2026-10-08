@@ -1,3 +1,7 @@
+![Uploading mermaid-diagram (4).png…]()
+<img width="3110" height="3336" alt="mermaid-diagram (3)" src="https://github.com/user-attachments/assets/f122a8f2-2dbc-4b48-a452-f21fde0ca3f0" />
+<img width="1416" height="1374" alt="mermaid-diagram (2)" src="https://github.com/user-attachments/assets/101feed9-0e0c-4d3e-ad35-14a87c63c8fd" />
+<img width="2778" height="2768" alt="mermaid-diagram" src="https://github.com/user-attachments/assets/4ed594b0-cbd6-4c90-955c-fab8bb46d020" />
 # Papertrail AI — GenAI Document Intelligence Platform
 
 > A production-oriented document intelligence platform for uploading documents, performing grounded conversational Q&A, retrieving relevant document context using vector search, and generating citation-backed answers with an LLM.
