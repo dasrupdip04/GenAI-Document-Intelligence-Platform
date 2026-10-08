@@ -12,7 +12,7 @@ from app.core.config import get_settings
 from app.db.database import Base
 from app.models.document import Document
 from app.models.user import User
-from app.models.stage2 import Citation, Conversation, DocumentChunk, IngestionJob, Message
+from app.models.stage2 import Citation, Conversation, ConversationDocument, DocumentChunk, IngestionJob, Message
 
 config = context.config
 

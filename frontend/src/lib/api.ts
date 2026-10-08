@@ -16,7 +16,12 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}): Pr
 
   if (!response.ok) {
     const errorBody = await response.text()
-    throw new Error(errorBody || 'API request failed')
+    let message = errorBody || 'API request failed'
+    try {
+      const parsed = JSON.parse(errorBody) as { detail?: unknown }
+      if (typeof parsed.detail === 'string') message = parsed.detail
+    } catch { /* Leave plain-text server errors unchanged. */ }
+    throw new Error(message)
   }
 
   if (response.status === 204) {

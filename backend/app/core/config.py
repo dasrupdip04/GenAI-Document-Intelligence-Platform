@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,9 +27,12 @@ class Settings(BaseSettings):
     storage_path: str = './storage/documents'
     max_upload_size_mb: int = 10
     gemini_api_key: str = ''
-    gemini_model: str = 'gemini-2.0-flash'
+    gemini_model: str = 'gemini-3.8-flash'
     gemini_embedding_model: str = 'gemini-embedding-001'
-    embedding_dimensions: int = 768
+    embedding_dimensions: int = Field(
+        default=768,
+        validation_alias=AliasChoices('EMBEDDING_DIMENSION', 'EMBEDDING_DIMENSIONS', 'embedding_dimensions'),
+    )
 
     @field_validator('storage_path')
     @classmethod

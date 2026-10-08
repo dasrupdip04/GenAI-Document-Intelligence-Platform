@@ -34,9 +34,9 @@ services:
       STORAGE_PATH: /app/storage/documents
       MAX_UPLOAD_SIZE_MB: 10
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.8-flash}
       GEMINI_EMBEDDING_MODEL: ${GEMINI_EMBEDDING_MODEL:-gemini-embedding-001}
-      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-768}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-768}
       LOG_LEVEL: INFO
       ENVIRONMENT: development
     ports:

@@ -38,6 +38,7 @@ class DocumentService:
         return hashlib.sha256(payload).hexdigest()
 
     async def create_document(self, user_id: str, filename: str, file_obj: bytes, content_type: str | None) -> Document:
+        filename = filename.replace('\\', '/').rsplit('/', 1)[-1] or 'upload'
         self._validate_file(filename, content_type, len(file_obj), file_obj)
 
         document_id = str(uuid4())

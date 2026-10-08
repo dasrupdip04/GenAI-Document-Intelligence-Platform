@@ -21,7 +21,7 @@ def verify_supabase_jwt(token: str) -> dict[str, Any]:
         payload = jwt.decode(
             token,
             signing_key.key,
-            algorithms=['RS256'],
+            algorithms=['ES256'],
             audience='authenticated',
             issuer=f'{settings.supabase_url}/auth/v1',
             options={'require': ['exp', 'sub', 'aud', 'iss']},

@@ -8,6 +8,19 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class ConversationCreate(BaseModel):
     title: str = Field(default='New conversation', min_length=1, max_length=255)
+    document_ids: list[str] = Field(default_factory=list)
+
+
+class ConversationDocumentRead(BaseModel):
+    id: str
+    filename: str
+    file_type: str
+    status: str
+    error_message: str | None = None
+
+
+class ConversationDocumentAttach(BaseModel):
+    document_id: str = Field(min_length=1)
 
 
 class CitationRead(BaseModel):
@@ -25,7 +38,7 @@ class MessageRead(BaseModel):
     role: str
     content: str
     created_at: datetime | None = None
-    citations: list[CitationRead] = []
+    citations: list[CitationRead] = Field(default_factory=list)
 
 
 class ConversationRead(BaseModel):
@@ -33,7 +46,8 @@ class ConversationRead(BaseModel):
     title: str
     created_at: datetime
     updated_at: datetime
-    messages: list[MessageRead] = []
+    messages: list[MessageRead] = Field(default_factory=list)
+    documents: list[ConversationDocumentRead] = Field(default_factory=list)
 
 
 class ConversationSummary(BaseModel):

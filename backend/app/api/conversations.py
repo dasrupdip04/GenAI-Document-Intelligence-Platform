@@ -1,27 +1,43 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+import logging
+from datetime import datetime, timezone
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError
 from app.db.database import get_db
 from app.dependencies.auth import get_current_user
-from app.models.stage2 import Citation, Conversation, DocumentChunk, Message
+from app.models.stage2 import Citation, Conversation, ConversationDocument, DocumentChunk, Message
 from app.models.document import Document
 from app.models.user import User
 from app.schemas.conversation import (CitationRead, ConversationCreate, ConversationRead,
-    ConversationSummary, MessageRead, QuestionCreate)
+    ConversationDocumentAttach, ConversationDocumentRead, ConversationSummary, MessageRead, QuestionCreate)
 from app.services.rag_service import RAGService
+from app.services.providers import (GeminiConfigurationError, GeminiMalformedResponseError,
+    GeminiProviderError, GeminiTimeoutError)
 from app.services.retrieval_service import RetrievalService
 
 router = APIRouter(prefix='/api/v1/conversations', tags=['conversations'])
+logger = logging.getLogger(__name__)
 
 
 @router.post('', response_model=ConversationSummary, status_code=201)
 async def create_conversation(payload: ConversationCreate, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     conversation = Conversation(user_id=user.id, title=payload.title)
-    db.add(conversation); await db.commit(); await db.refresh(conversation)
+    db.add(conversation)
+    await db.flush()
+    if payload.document_ids:
+        result = await db.execute(select(Document.id).where(
+            Document.id.in_(set(payload.document_ids)), Document.user_id == user.id
+        ))
+        owned_ids = set(result.scalars().all())
+        if owned_ids != set(payload.document_ids):
+            raise NotFoundError('One or more documents were not found.')
+        db.add_all(ConversationDocument(conversation_id=conversation.id, document_id=document_id)
+                   for document_id in owned_ids)
+    await db.commit(); await db.refresh(conversation)
     return conversation
 
 
@@ -29,6 +45,14 @@ async def create_conversation(payload: ConversationCreate, user: User = Depends(
 async def list_conversations(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Conversation).where(Conversation.user_id == user.id).order_by(Conversation.updated_at.desc()))
     return list(result.scalars().all())
+
+
+@router.delete('/{conversation_id}', status_code=204)
+async def delete_conversation(conversation_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    conversation = await _owned_conversation(db, conversation_id, user.id)
+    await db.delete(conversation)
+    await db.commit()
+    return None
 
 
 @router.get('/{conversation_id}', response_model=ConversationRead)
@@ -40,24 +64,71 @@ async def get_conversation(conversation_id: str, user: User = Depends(get_curren
     for message in messages:
         citations = await _message_citations(db, message.id)
         out.append(MessageRead(id=message.id, role=message.role, content=message.content, created_at=message.created_at, citations=citations))
+    documents_result = await db.execute(select(Document).join(
+        ConversationDocument, ConversationDocument.document_id == Document.id
+    ).where(ConversationDocument.conversation_id == conversation.id, Document.user_id == user.id))
+    documents = [ConversationDocumentRead(id=d.id, filename=d.filename, file_type=d.file_type,
+                                           status=d.status, error_message=d.error_message)
+                 for d in documents_result.scalars().all()]
     return ConversationRead(id=conversation.id, title=conversation.title, created_at=conversation.created_at,
-                            updated_at=conversation.updated_at, messages=out)
+                            updated_at=conversation.updated_at, messages=out, documents=documents)
+
+
+@router.post('/{conversation_id}/documents', response_model=ConversationDocumentRead, status_code=201)
+async def attach_document(conversation_id: str, payload: ConversationDocumentAttach, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    conversation = await _owned_conversation(db, conversation_id, user.id)
+    document = await db.scalar(select(Document).where(Document.id == payload.document_id, Document.user_id == user.id))
+    if not document:
+        raise NotFoundError('Document not found.')
+    link = await db.get(ConversationDocument, (conversation.id, document.id))
+    if not link:
+        db.add(ConversationDocument(conversation_id=conversation.id, document_id=document.id))
+        await db.commit()
+    return ConversationDocumentRead(id=document.id, filename=document.filename, file_type=document.file_type,
+                                    status=document.status, error_message=document.error_message)
+
+
+@router.delete('/{conversation_id}/documents/{document_id}', status_code=204)
+async def detach_document(conversation_id: str, document_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    conversation = await _owned_conversation(db, conversation_id, user.id)
+    link = await db.get(ConversationDocument, (conversation.id, document_id))
+    if not link:
+        raise NotFoundError('Conversation document not found.')
+    await db.delete(link)
+    await db.commit()
+    return None
 
 
 @router.post('/{conversation_id}/messages', response_model=MessageRead, status_code=201)
 async def ask(conversation_id: str, payload: QuestionCreate, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     conversation = await _owned_conversation(db, conversation_id, user.id)
-    history_result = await db.execute(select(Message).where(Message.conversation_id == conversation.id).order_by(Message.created_at.desc()).limit(8))
+    user_message = Message(conversation_id=conversation.id, role='user', content=payload.content)
+    db.add(user_message)
+    conversation.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    history_result = await db.execute(select(Message).where(
+        Message.conversation_id == conversation.id, Message.id != user_message.id
+    ).order_by(Message.created_at.desc()).limit(8))
     history = [{'role': m.role, 'content': m.content} for m in reversed(history_result.scalars().all())]
     try:
-        result = await RAGService(RetrievalService(db)).answer(user.id, payload.content, history, payload.document_ids)
+        attached_result = await db.execute(select(ConversationDocument.document_id).join(
+            Document, Document.id == ConversationDocument.document_id
+        ).where(ConversationDocument.conversation_id == conversation.id, Document.user_id == user.id,
+                Document.status == 'READY'))
+        document_ids = list(attached_result.scalars().all())
+        result = await RAGService(RetrievalService(db)).answer(user.id, payload.content, history, document_ids)
+    except GeminiProviderError as exc:
+        await db.rollback()
+        logger.error(
+            'rag_provider_failure provider=%s operation=%s model=%s upstream_http_status=%s gemini_code=%s retry_attempt=%s sanitized_message=%s',
+            exc.provider, exc.operation, exc.model, exc.upstream_http_status, exc.gemini_code,
+            exc.retry_attempt, exc.safe_message,
+        )
+        raise _gemini_http_error(exc) from exc
     except Exception as exc:
         await db.rollback()
-        import logging
-        logging.getLogger(__name__).exception('RAG request failed conversation_id=%s', conversation_id)
-        from fastapi import HTTPException
-        raise HTTPException(status_code=503, detail='Unable to answer right now. Check Gemini configuration and try again.') from exc
-    db.add(Message(conversation_id=conversation.id, role='user', content=payload.content))
+        logger.error('rag_pipeline_failure conversation_id=%s error_type=%s', conversation_id, type(exc).__name__)
+        raise HTTPException(status_code=500, detail='Unable to process this question right now.') from exc
     assistant = Message(conversation_id=conversation.id, role='assistant', content=result['answer'])
     db.add(assistant); await db.flush()
     ids = [citation['chunk_id'] for citation in result['citations']]
@@ -91,3 +162,24 @@ async def _message_citations(db: AsyncSession, message_id) -> list[CitationRead]
         .where(Citation.message_id == message_id))
     return [CitationRead(id=c.id, chunk_id=c.chunk_id, document_id=d.id, filename=d.filename,
                          page_number=c.page_number, relevance_score=c.relevance_score) for c, d in result.all()]
+
+
+def _gemini_http_error(error: GeminiProviderError) -> HTTPException:
+    status = error.upstream_http_status
+    if isinstance(error, GeminiConfigurationError):
+        return HTTPException(status_code=500, detail='Gemini is not configured on the server.')
+    if isinstance(error, GeminiTimeoutError):
+        return HTTPException(status_code=503, detail='Gemini is taking too long to respond. Please try again.')
+    if status == 429:
+        return HTTPException(status_code=429, detail='Gemini quota/rate limit reached. Please try again later.')
+    if status == 503 or (status is not None and status >= 500):
+        return HTTPException(status_code=503, detail='Gemini is temporarily unavailable. Please try again.')
+    if status in {401, 403}:
+        return HTTPException(status_code=502, detail='Gemini authentication or permission configuration is invalid.')
+    if status == 404:
+        return HTTPException(status_code=502, detail='The configured Gemini model is unavailable.')
+    if isinstance(error, GeminiMalformedResponseError):
+        return HTTPException(status_code=502, detail='Gemini returned an invalid response.')
+    if status is None:
+        return HTTPException(status_code=500, detail='Gemini provider configuration failed.')
+    return HTTPException(status_code=502, detail='Gemini rejected the request configuration.')

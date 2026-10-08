@@ -17,6 +17,7 @@ from app.db.database import Base
 class PortableVector(TypeDecorator):
     impl = JSON
     cache_ok = True
+    comparator_factory = Vector.comparator_factory
 
     def __init__(self, dimensions: int):
         self.dimensions = dimensions
@@ -28,7 +29,11 @@ class PortableVector(TypeDecorator):
 
 class DocumentChunk(Base):
     __tablename__ = 'document_chunks'
-    __table_args__ = (Index('ix_document_chunks_document_index', 'document_id', 'chunk_index'),)
+    __table_args__ = (
+        Index('ix_document_chunks_document_index', 'document_id', 'chunk_index'),
+        Index('ix_document_chunks_embedding_hnsw', 'embedding', postgresql_using='hnsw',
+              postgresql_ops={'embedding': 'vector_cosine_ops'}),
+    )
 
     id: Mapped[object] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     document_id: Mapped[str] = mapped_column(ForeignKey('documents.id', ondelete='CASCADE'), nullable=False, index=True)
@@ -48,6 +53,13 @@ class Conversation(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False, default='New conversation')
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class ConversationDocument(Base):
+    __tablename__ = 'conversation_documents'
+    conversation_id: Mapped[object] = mapped_column(ForeignKey('conversations.id', ondelete='CASCADE'), primary_key=True)
+    document_id: Mapped[str] = mapped_column(ForeignKey('documents.id', ondelete='CASCADE'), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class Message(Base):

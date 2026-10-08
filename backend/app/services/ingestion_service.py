@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 from time import monotonic
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.document import Document
@@ -42,7 +41,9 @@ class IngestionService:
                 rows.extend((chunk, page.page_number) for chunk in self.chunker.split(page.text))
             if not rows:
                 raise ValueError('No readable text found in the document.')
-            vectors = await self.embedder.embed([row[0] for row in rows])
+            vectors: list[list[float]] = []
+            for offset in range(0, len(rows), 100):
+                vectors.extend(await self.embedder.embed([row[0] for row in rows[offset:offset + 100]]))
             if len(vectors) != len(rows):
                 raise RuntimeError('Embedding provider returned an unexpected result count.')
             await self.session.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document_id))
@@ -60,12 +61,14 @@ class IngestionService:
                         document_id, job_id, len(rows), (monotonic() - started) * 1000)
         except Exception as exc:
             await self.session.rollback()
-            logger.exception('ingestion failed document_id=%s job_id=%s duration_ms=%.1f',
-                             document_id, job_id, (monotonic() - started) * 1000)
+            logger.error('ingestion failed document_id=%s job_id=%s error_type=%s duration_ms=%.1f',
+                         document_id, job_id, type(exc).__name__, (monotonic() - started) * 1000)
             job = await self.session.get(IngestionJob, job_id)
             document = await self.session.get(Document, document_id)
             if job:
-                job.status = 'FAILED'; job.error_message = str(exc)[:1000]; job.completed_at = datetime.now(timezone.utc)
+                job.status = 'FAILED'
+                job.error_message = f'Ingestion failed ({type(exc).__name__}). Check server logs.'
+                job.completed_at = datetime.now(timezone.utc)
             if document:
                 document.status = 'FAILED'; document.error_message = 'Document ingestion failed.'
             await self.session.commit()

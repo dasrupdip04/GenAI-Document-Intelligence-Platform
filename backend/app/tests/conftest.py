@@ -5,6 +5,7 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 import pytest
+from app.core.config import get_settings
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -60,7 +61,13 @@ def db_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 @pytest.fixture
-def client(db_session: AsyncSession) -> TestClient:
+def client(db_session: AsyncSession, tmp_path, monkeypatch) -> TestClient:
+    test_settings = get_settings().model_copy(update={'storage_path': str(tmp_path)})
+    monkeypatch.setattr('app.services.document_service.get_settings', lambda: test_settings)
+    async def skip_background_ingestion(*args, **kwargs):
+        return None
+    monkeypatch.setattr('app.api.documents._run_ingestion', skip_background_ingestion)
+
     async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
         yield db_session
 
@@ -68,4 +75,3 @@ def client(db_session: AsyncSession) -> TestClient:
     with TestClient(app) as api_client:
         yield api_client
     app.dependency_overrides.clear()
-

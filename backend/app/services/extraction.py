@@ -37,24 +37,21 @@ class RecursiveChunker:
         text = text.strip()
         if not text:
             return []
-        separators = ['\n\n', '\n', '. ', ' ', '']
-        parts = [text]
-        for sep in separators:
-            if all(len(part) <= self.chunk_size for part in parts):
-                break
-            if not sep:
-                parts = [piece for part in parts for piece in (part[i:i + self.chunk_size] for i in range(0, len(part), self.chunk_size))]
-            else:
-                parts = [piece for part in parts for piece in part.split(sep) if piece]
         chunks: list[str] = []
-        current = ''
-        for part in parts:
-            separator = ' ' if current else ''
-            if current and len(current) + len(separator) + len(part) > self.chunk_size:
-                chunks.append(current)
-                current = current[-self.overlap:] + (' ' if self.overlap else '') + part
-            else:
-                current += separator + part
-        if current:
-            chunks.append(current)
+        start = 0
+        while start < len(text):
+            end = min(start + self.chunk_size, len(text))
+            if end < len(text):
+                minimum = start + self.chunk_size // 2
+                boundaries = [text.rfind(separator, minimum, end) + len(separator)
+                              for separator in ('\n\n', '\n', '. ', ' ')]
+                boundary = max((value for value in boundaries if value > minimum), default=0)
+                if boundary:
+                    end = boundary
+            chunk = text[start:end].strip()
+            if chunk:
+                chunks.append(chunk)
+            if end >= len(text):
+                break
+            start = max(start + 1, end - self.overlap)
         return chunks
