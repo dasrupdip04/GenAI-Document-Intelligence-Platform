@@ -1,7 +1,9 @@
-![Uploading mermaid-diagram (4).png…]()
-<img width="3110" height="3336" alt="mermaid-diagram (3)" src="https://github.com/user-attachments/assets/f122a8f2-2dbc-4b48-a452-f21fde0ca3f0" />
-<img width="1416" height="1374" alt="mermaid-diagram (2)" src="https://github.com/user-attachments/assets/101feed9-0e0c-4d3e-ad35-14a87c63c8fd" />
-<img width="2778" height="2768" alt="mermaid-diagram" src="https://github.com/user-attachments/assets/4ed594b0-cbd6-4c90-955c-fab8bb46d020" />
+<img width="2578" height="2272" alt="mermaid-diagram (5)" src="https://github.com/user-attachments/assets/350564dd-7729-400e-91e8-7ecec5d78451" />
+<img width="3016" height="1194" alt="mermaid-diagram (4)" src="https://github.com/user-attachments/assets/6517c17c-dc59-426f-84a4-e28efadeb7ef" />
+<img width="3110" height="3336" alt="mermaid-diagram (3)" src="https://github.com/user-attachments/assets/0357199d-4168-4126-97da-073deb1a7beb" />
+<img width="1416" height="1374" alt="mermaid-diagram (2)" src="https://github.com/user-attachments/assets/56e056dc-e564-4dad-bcb0-2acd24acdf3c" />
+<img width="2778" height="2768" alt="mermaid-diagram (1)" src="https://github.com/user-attachments/assets/dc8cf26e-b203-4a5a-85fd-9579e5bfe69e" />
+
 # Papertrail AI — GenAI Document Intelligence Platform
 
 > A production-oriented document intelligence platform for uploading documents, performing grounded conversational Q&A, retrieving relevant document context using vector search, and generating citation-backed answers with an LLM.
