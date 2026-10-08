@@ -49,6 +49,29 @@ function AppWorkspace({ user, logout }: { user: User; logout: () => void }) {
   const fileInput = useRef<HTMLInputElement>(null)
   const sendingMessage = useRef(false)
   const libraryRequest = useRef<Promise<void> | null>(null)
+  const documentsRequest = useRef<Promise<void> | null>(null)
+
+  const refreshDocuments = async () => {
+    if (documentsRequest.current) return documentsRequest.current
+    documentsRequest.current = (async () => {
+      try {
+        const docs = await apiRequest<DocumentItem[]>('/api/v1/documents')
+        setDocuments(docs)
+        setDetail(current => current ? {
+          ...current,
+          documents: current.documents.map(attached => {
+            const updated = docs.find(doc => doc.id === attached.id)
+            return updated ? { ...attached, status: updated.status, error_message: updated.error_message } : attached
+          }),
+        } : current)
+      } catch (err) {
+        setNotice(err instanceof Error ? err.message : 'Could not refresh document status')
+      } finally {
+        documentsRequest.current = null
+      }
+    })()
+    return documentsRequest.current
+  }
 
   const refreshLibrary = async () => {
     if (libraryRequest.current) return libraryRequest.current
@@ -75,6 +98,12 @@ function AppWorkspace({ user, logout }: { user: User; logout: () => void }) {
     catch (err) { setNotice(err instanceof Error ? err.message : 'Could not load conversation') }
   }
   useEffect(() => { void refreshLibrary() }, [])
+  const hasProcessingDocuments = documents.some(doc => doc.status === 'PROCESSING')
+  useEffect(() => {
+    if (!hasProcessingDocuments) return
+    const timer = window.setInterval(() => { void refreshDocuments() }, 1500)
+    return () => window.clearInterval(timer)
+  }, [hasProcessingDocuments])
 
   const openConversation = async (id: string) => {
     setBusy(true); setNotice('')
@@ -112,13 +141,14 @@ function AppWorkspace({ user, logout }: { user: User; logout: () => void }) {
     setBusy(true); setNotice('')
     try {
       const uploaded = await uploadDocument(file) as DocumentItem
+      setDocuments(current => [uploaded, ...current.filter(doc => doc.id !== uploaded.id)])
       if (page === 'chat' && detail) {
         await apiRequest(`/api/v1/conversations/${detail.id}/documents`, {
           method: 'POST', body: JSON.stringify({ document_id: uploaded.id }),
         })
         await refreshChat(detail.id)
       }
-      await refreshLibrary()
+      await refreshDocuments()
     } catch (err) { setNotice(err instanceof Error ? err.message : 'Upload failed') }
     finally { setBusy(false); event.target.value = '' }
   }

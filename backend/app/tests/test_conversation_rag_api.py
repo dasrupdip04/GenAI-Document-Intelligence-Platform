@@ -153,7 +153,7 @@ def test_provider_retry_policy_does_not_retry_429(monkeypatch, status_code, retr
 
     provider = GeminiProvider.__new__(GeminiProvider)
     provider.settings = SimpleNamespace(gemini_model='gemini-3.8-flash', gemini_api_key='')
-    monkeypatch.setattr(provider, '_client', lambda: SimpleNamespace(aio=SimpleNamespace(models=Models())))
+    provider.client = SimpleNamespace(aio=SimpleNamespace(models=Models()))
     async def no_wait(_seconds): return None
     monkeypatch.setattr(provider_module.asyncio, 'sleep', no_wait)
     with pytest.raises(GeminiProviderError) as exc:
@@ -168,6 +168,6 @@ def test_gemini_empty_response_is_reported_as_malformed(monkeypatch):
         async def generate_content(self, **kwargs): return SimpleNamespace(text=None)
     provider = GeminiProvider.__new__(GeminiProvider)
     provider.settings = SimpleNamespace(gemini_model='gemini-3.8-flash', gemini_api_key='')
-    monkeypatch.setattr(provider, '_client', lambda: SimpleNamespace(aio=SimpleNamespace(models=Models())))
+    provider.client = SimpleNamespace(aio=SimpleNamespace(models=Models()))
     with pytest.raises(GeminiMalformedResponseError):
         asyncio.run(provider.generate('prompt'))

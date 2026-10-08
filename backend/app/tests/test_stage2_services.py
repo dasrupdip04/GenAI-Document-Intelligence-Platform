@@ -5,6 +5,8 @@ import sys
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from app.models.document import Document
 from app.models.stage2 import IngestionJob
 from app.services.extraction import DocumentExtractor, ExtractedPage, RecursiveChunker
@@ -41,6 +43,12 @@ def test_chunker_preserves_source_text_and_bounds_chunks():
     assert len(chunks) > 1
     assert all(len(chunk) <= 80 for chunk in chunks)
     assert all(chunk in source for chunk in chunks)
+
+
+@pytest.mark.parametrize("overlap", [80, 81])
+def test_chunker_rejects_overlap_at_least_chunk_size(overlap):
+    with pytest.raises(ValueError, match="smaller than chunk size"):
+        RecursiveChunker(chunk_size=80, overlap=overlap)
 
 
 class FakeSession:
@@ -104,9 +112,9 @@ def test_rag_runs_query_variants_and_returns_real_retrieval_citations():
 
     class Retrieval:
         queries = []
-        async def retrieve(self, user_id, query, top_k, document_ids):
-            self.queries.append(query)
-            return [retrieved]
+        async def retrieve_many(self, user_id, queries, top_k, document_ids):
+            self.queries.extend(queries)
+            return [[retrieved] for _ in queries]
 
     class LLM:
         calls = []
@@ -147,7 +155,7 @@ def test_gemini_embedding_provider_batches_through_mocked_sdk(monkeypatch):
 
     provider = GeminiProvider.__new__(GeminiProvider)
     provider.settings = SimpleNamespace(gemini_embedding_model='test-embed', embedding_dimensions=1)
-    monkeypatch.setattr(provider, '_client', lambda: FakeClient())
+    provider.client = FakeClient()
     genai = types.ModuleType('google.genai')
     genai.types = SimpleNamespace(EmbedContentConfig=lambda **kwargs: kwargs)
     google = types.ModuleType('google')
@@ -155,6 +163,33 @@ def test_gemini_embedding_provider_batches_through_mocked_sdk(monkeypatch):
     monkeypatch.setitem(sys.modules, 'google', google)
     monkeypatch.setitem(sys.modules, 'google.genai', genai)
     assert asyncio.run(provider.embed(['one', 'two'])) == [[1.0], [2.0]]
+
+
+def test_gemini_client_is_cached(monkeypatch):
+    import types
+    from app.services.providers import GeminiProvider
+
+    created = []
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            created.append(kwargs)
+
+    genai = types.ModuleType('google.genai')
+    genai.Client = FakeClient
+    genai.types = SimpleNamespace(HttpOptions=lambda **kwargs: kwargs)
+    google = types.ModuleType('google')
+    google.genai = genai
+    monkeypatch.setitem(sys.modules, 'google', google)
+    monkeypatch.setitem(sys.modules, 'google.genai', genai)
+
+    provider = GeminiProvider.__new__(GeminiProvider)
+    provider.settings = SimpleNamespace(
+        gemini_api_key='test-key', gemini_model='test-model')
+
+    assert provider.client is provider.client
+    assert len(created) == 1
+    assert created[0]['api_key'] == 'test-key'
 
 
 def test_gemini_generation_uses_configured_model(monkeypatch):
@@ -166,7 +201,7 @@ def test_gemini_generation_uses_configured_model(monkeypatch):
             return SimpleNamespace(text='grounded response')
     provider = GeminiProvider.__new__(GeminiProvider)
     provider.settings = SimpleNamespace(gemini_model='configured-generation-model', gemini_api_key='test-key')
-    monkeypatch.setattr(provider, '_client', lambda: SimpleNamespace(aio=SimpleNamespace(models=FakeModels())))
+    provider.client = SimpleNamespace(aio=SimpleNamespace(models=FakeModels()))
     assert asyncio.run(provider.generate('prompt')) == 'grounded response'
 
 
@@ -189,7 +224,7 @@ def test_gemini_generation_retries_transient_provider_failure(monkeypatch):
             return SimpleNamespace(text='grounded response')
     provider = GeminiProvider.__new__(GeminiProvider)
     provider.settings = SimpleNamespace(gemini_model='configured-model', gemini_api_key='')
-    monkeypatch.setattr(provider, '_client', lambda: SimpleNamespace(aio=SimpleNamespace(models=FakeModels())))
+    provider.client = SimpleNamespace(aio=SimpleNamespace(models=FakeModels()))
     async def no_wait(_seconds): return None
     monkeypatch.setattr(providers.asyncio, 'sleep', no_wait)
     assert asyncio.run(provider.generate('prompt')) == 'grounded response'
@@ -210,7 +245,7 @@ def test_gemini_generation_timeout_is_bounded_and_maps_to_503(monkeypatch):
 
     provider = GeminiProvider.__new__(GeminiProvider)
     provider.settings = SimpleNamespace(gemini_model='gemini-3.8-flash', gemini_api_key='')
-    monkeypatch.setattr(provider, '_client', lambda: SimpleNamespace(aio=SimpleNamespace(models=SlowModels())))
+    provider.client = SimpleNamespace(aio=SimpleNamespace(models=SlowModels()))
     monkeypatch.setattr(providers, 'GEMINI_REQUEST_TIMEOUT_SECONDS', 0.005)
     try:
         asyncio.run(provider.generate('prompt'))
@@ -239,7 +274,7 @@ def test_gemini_embedding_timeout_is_bounded(monkeypatch):
     monkeypatch.setitem(sys.modules, 'google.genai', genai)
     provider = GeminiProvider.__new__(GeminiProvider)
     provider.settings = SimpleNamespace(gemini_embedding_model='test-embed', embedding_dimensions=1, gemini_api_key='')
-    monkeypatch.setattr(provider, '_client', lambda: SimpleNamespace(aio=SimpleNamespace(models=SlowModels())))
+    provider.client = SimpleNamespace(aio=SimpleNamespace(models=SlowModels()))
     monkeypatch.setattr(providers, 'GEMINI_REQUEST_TIMEOUT_SECONDS', 0.005)
     try:
         asyncio.run(provider.embed(['one']))
@@ -275,6 +310,92 @@ def test_retrieval_sql_is_user_scoped_and_supports_cosine_distance():
             assert '<=>' in sql
             return Result()
     assert asyncio.run(RetrievalService(Session(), Embedder()).retrieve('owner-1', 'question')) == []
+
+
+def test_retrieve_many_batches_all_embeddings_in_one_call():
+    class Embedder:
+        calls = []
+
+        async def embed(self, texts):
+            self.calls.append(texts)
+            return [[0.1] * 768 for _ in texts]
+
+    class Result:
+        def all(self):
+            return []
+
+    class Session:
+        bind = SimpleNamespace(dialect=SimpleNamespace(name='postgresql'))
+        calls = 0
+
+        async def execute(self, _statement):
+            self.calls += 1
+            return Result()
+
+    embedder = Embedder()
+    session = Session()
+    results = asyncio.run(RetrievalService(session, embedder).retrieve_many(
+        'owner-1', ['original', 'variant one', 'step back']))
+
+    assert embedder.calls == [['original', 'variant one', 'step back']]
+    assert session.calls == 3
+    assert results == [[], [], []]
+
+
+def test_retrieve_many_deduplicates_queries_before_embedding():
+    class Embedder:
+        calls = []
+
+        async def embed(self, texts):
+            self.calls.append(texts)
+            return [[0.1] * 768 for _ in texts]
+
+    class Result:
+        def all(self):
+            return []
+
+    class Session:
+        bind = SimpleNamespace(dialect=SimpleNamespace(name='postgresql'))
+        calls = 0
+
+        async def execute(self, _statement):
+            self.calls += 1
+            return Result()
+
+    embedder = Embedder()
+    session = Session()
+    results = asyncio.run(RetrievalService(session, embedder).retrieve_many(
+        'owner-1', [' question ', 'question', 'variant']))
+
+    assert embedder.calls == [['question', 'variant']]
+    assert session.calls == 2
+    assert results == [[], []]
+
+
+def test_retrieve_remains_compatible_with_single_query():
+    class Embedder:
+        calls = []
+
+        async def embed(self, texts):
+            self.calls.append(texts)
+            return [[0.1] * 768]
+
+    class Result:
+        def all(self):
+            return []
+
+    class Session:
+        bind = SimpleNamespace(dialect=SimpleNamespace(name='postgresql'))
+
+        async def execute(self, _statement):
+            return Result()
+
+    embedder = Embedder()
+    result = asyncio.run(RetrievalService(Session(), embedder).retrieve(
+        'owner-1', 'question'))
+
+    assert embedder.calls == [['question']]
+    assert result == []
 
 
 def test_conversation_owner_lookup_returns_not_found_for_other_user():
