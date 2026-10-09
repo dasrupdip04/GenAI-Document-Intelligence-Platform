@@ -6,9 +6,9 @@ from typing import Any
 
 from app.core.config import get_settings
 from app.services.providers import (
-    GeminiMalformedResponseError,
-    GeminiProvider,
+    GroqProvider,
     LLMProvider,
+    MalformedProviderResponseError,
 )
 from app.services.retrieval_service import (
     RetrievalService,
@@ -23,7 +23,7 @@ class RAGService:
         llm: LLMProvider | None = None,
     ) -> None:
         self.retrieval = retrieval
-        self.llm = llm or GeminiProvider()
+        self.llm = llm or GroqProvider()
 
     async def _expand_query(
         self,
@@ -34,7 +34,7 @@ class RAGService:
         - exactly 3 alternative retrieval queries
         - exactly 1 broader step-back query
 
-        This is ONE Gemini generation request.
+        This is ONE Groq generation request.
         """
 
         raw = await self.llm.generate(
@@ -113,13 +113,11 @@ class RAGService:
             ValueError,
             json.JSONDecodeError,
         ) as error:
-            raise GeminiMalformedResponseError(
-                operation="query_expansion",
-                model=get_settings().gemini_model,
-                message=(
-                    "Gemini returned malformed query "
-                    "expansion data."
-                ),
+            raise MalformedProviderResponseError(
+                provider="groq", operation="query_expansion",
+                model=get_settings().groq_model,
+                message="Groq returned malformed query expansion data.",
+                status=502,
             ) from error
 
     async def answer(
@@ -143,7 +141,7 @@ class RAGService:
         # STEP 1: Query expansion
         # ---------------------------------------------------------
         #
-        # ONE Gemini generation call.
+        # ONE Groq generation call.
         #
         # Result:
         #   original query
@@ -156,7 +154,7 @@ class RAGService:
         # STEP 2: Batched embedding + retrieval
         # ---------------------------------------------------------
         #
-        # ONE Gemini embedding API call for ALL queries.
+        # One local embedding batch for all queries.
         #
         # Retrieval itself performs pgvector searches.
         #
@@ -251,19 +249,18 @@ class RAGService:
             + "\n\n".join(context)
         )
 
-        # ONE Gemini generation call.
+        # ONE Groq generation call.
         #
         # The provider itself may perform ONE retry only if
-        # Gemini returns a transient 5xx.
+        # Groq returns a transient 5xx.
         answer = await self.llm.generate(prompt)
 
         if not answer.strip():
-            raise GeminiMalformedResponseError(
-                operation="generation",
-                model=get_settings().gemini_model,
-                message=(
-                    "Gemini returned an empty grounded answer."
-                ),
+            raise MalformedProviderResponseError(
+                provider="groq", operation="generation",
+                model=get_settings().groq_model,
+                message="Groq returned an empty grounded answer.",
+                status=502,
             )
 
         # ---------------------------------------------------------

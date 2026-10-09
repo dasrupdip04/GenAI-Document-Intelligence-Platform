@@ -14,10 +14,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
-ENV GEMINI_API_KEY="" \
-    GEMINI_MODEL=gemini-2.0-flash \
-    GEMINI_EMBEDDING_MODEL=gemini-embedding-001 \
-    EMBEDDING_DIMENSIONS=768
+ENV GROQ_MODEL=openai/gpt-oss-120b \
+    EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2 \
+    EMBEDDING_DIMENSION=384 \
+    HF_HOME=/app/model-cache
 
 COPY . .
 

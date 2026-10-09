@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.document import Document
 from app.models.stage2 import DocumentChunk
-from app.services.providers import EmbeddingProvider, GeminiProvider
+from app.services.providers import EmbeddingProvider, LocalEmbeddingProvider
 
 
 @dataclass
@@ -25,7 +25,7 @@ class RetrievalService:
         embedder: EmbeddingProvider | None = None,
     ) -> None:
         self.session = session
-        self.embedder = embedder or GeminiProvider()
+        self.embedder = embedder or LocalEmbeddingProvider()
 
     async def retrieve_many(
         self,
@@ -60,7 +60,7 @@ class RetrievalService:
             return [[] for _ in unique_queries]
 
         # IMPORTANT:
-        # One Gemini embedding API call for all retrieval queries.
+        # One local embedding batch for all retrieval queries.
         vectors = await self.embedder.embed(unique_queries)
 
         if len(vectors) != len(unique_queries):

@@ -26,11 +26,12 @@ class Settings(BaseSettings):
     supabase_jwks_url: str
     storage_path: str = './storage/documents'
     max_upload_size_mb: int = 10
-    gemini_api_key: str = ''
-    gemini_model: str = 'gemini-3.8-flash'
-    gemini_embedding_model: str = 'gemini-embedding-001'
+    groq_api_key: str = ''
+    groq_model: str = 'openai/gpt-oss-120b'
+    embedding_model: str = 'sentence-transformers/all-MiniLM-L6-v2'
+    hf_home: str = './model-cache'
     embedding_dimensions: int = Field(
-        default=768,
+        default=384,
         validation_alias=AliasChoices('EMBEDDING_DIMENSION', 'EMBEDDING_DIMENSIONS', 'embedding_dimensions'),
     )
 

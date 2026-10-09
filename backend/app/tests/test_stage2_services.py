@@ -139,166 +139,40 @@ def test_rag_with_no_attached_documents_does_not_call_provider():
     assert result == {'answer': 'The information is not available in the documents.', 'citations': []}
 
 
-def test_gemini_embedding_provider_batches_through_mocked_sdk(monkeypatch):
-    import types
-    from app.services.providers import GeminiProvider
+def test_local_embedding_provider_batches_384d_vectors(monkeypatch):
+    import numpy as np
+    from app.services.providers import LocalEmbeddingProvider
 
-    class FakeModels:
-        async def embed_content(self, **kwargs):
-            assert kwargs['model'] == 'test-embed'
-            assert kwargs['contents'] == ['one', 'two']
-            assert kwargs['config'] == {'output_dimensionality': 1}
-            return SimpleNamespace(embeddings=[SimpleNamespace(values=[1.0]), SimpleNamespace(values=[2.0])])
+    class Token:
+        ids=[1, 2]; attention_mask=[1, 1]; type_ids=[0, 0]
+    class Tokenizer:
+        def encode_batch(self, texts):
+            assert texts == ['one', 'two']
+            return [Token(), Token()]
+    class Session:
+        calls=0
+        def get_inputs(self): return [SimpleNamespace(name='input_ids'), SimpleNamespace(name='attention_mask')]
+        def run(self, _outputs, feeds):
+            self.calls += 1
+            assert feeds['input_ids'].shape == (2, 2)
+            return [np.ones((2, 2, 384), dtype=np.float32)]
 
-    class FakeClient:
-        aio = SimpleNamespace(models=FakeModels())
-
-    provider = GeminiProvider.__new__(GeminiProvider)
-    provider.settings = SimpleNamespace(gemini_embedding_model='test-embed', embedding_dimensions=1)
-    provider.client = FakeClient()
-    genai = types.ModuleType('google.genai')
-    genai.types = SimpleNamespace(EmbedContentConfig=lambda **kwargs: kwargs)
-    google = types.ModuleType('google')
-    google.genai = genai
-    monkeypatch.setitem(sys.modules, 'google', google)
-    monkeypatch.setitem(sys.modules, 'google.genai', genai)
-    assert asyncio.run(provider.embed(['one', 'two'])) == [[1.0], [2.0]]
-
-
-def test_gemini_client_is_cached(monkeypatch):
-    import types
-    from app.services.providers import GeminiProvider
-
-    created = []
-
-    class FakeClient:
-        def __init__(self, **kwargs):
-            created.append(kwargs)
-
-    genai = types.ModuleType('google.genai')
-    genai.Client = FakeClient
-    genai.types = SimpleNamespace(HttpOptions=lambda **kwargs: kwargs)
-    google = types.ModuleType('google')
-    google.genai = genai
-    monkeypatch.setitem(sys.modules, 'google', google)
-    monkeypatch.setitem(sys.modules, 'google.genai', genai)
-
-    provider = GeminiProvider.__new__(GeminiProvider)
-    provider.settings = SimpleNamespace(
-        gemini_api_key='test-key', gemini_model='test-model')
-
-    assert provider.client is provider.client
-    assert len(created) == 1
-    assert created[0]['api_key'] == 'test-key'
+    provider=LocalEmbeddingProvider(); session=Session()
+    provider.runtime=(Tokenizer(), session)
+    vectors=asyncio.run(provider.embed(['one', 'two']))
+    assert session.calls == 1 and len(vectors) == 2
+    assert all(len(vector) == 384 for vector in vectors)
 
 
-def test_gemini_generation_uses_configured_model(monkeypatch):
-    from app.services.providers import GeminiProvider
-
-    class FakeModels:
-        async def generate_content(self, **kwargs):
-            assert kwargs['model'] == 'configured-generation-model'
-            return SimpleNamespace(text='grounded response')
-    provider = GeminiProvider.__new__(GeminiProvider)
-    provider.settings = SimpleNamespace(gemini_model='configured-generation-model', gemini_api_key='test-key')
-    provider.client = SimpleNamespace(aio=SimpleNamespace(models=FakeModels()))
-    assert asyncio.run(provider.generate('prompt')) == 'grounded response'
-
-
-def test_gemini_generation_retries_transient_provider_failure(monkeypatch):
-    import app.services.providers as providers
-    from app.services.providers import GeminiProvider
-    calls = 0
-
-    class TemporaryError(Exception):
-        code = 503
-        status = 'UNAVAILABLE'
-        message = 'temporary'
-
-    class FakeModels:
-        async def generate_content(self, **kwargs):
-            nonlocal calls
-            calls += 1
-            if calls == 1:
-                raise TemporaryError()
-            return SimpleNamespace(text='grounded response')
-    provider = GeminiProvider.__new__(GeminiProvider)
-    provider.settings = SimpleNamespace(gemini_model='configured-model', gemini_api_key='')
-    provider.client = SimpleNamespace(aio=SimpleNamespace(models=FakeModels()))
-    async def no_wait(_seconds): return None
-    monkeypatch.setattr(providers.asyncio, 'sleep', no_wait)
-    assert asyncio.run(provider.generate('prompt')) == 'grounded response'
-    assert calls == 2
-
-
-def test_gemini_generation_timeout_is_bounded_and_maps_to_503(monkeypatch):
-    import app.services.providers as providers
-    from app.api.conversations import _gemini_http_error
-    from app.services.providers import GeminiProvider, GeminiTimeoutError
-    calls = 0
-
-    class SlowModels:
-        async def generate_content(self, **kwargs):
-            nonlocal calls
-            calls += 1
-            await asyncio.sleep(0.05)
-
-    provider = GeminiProvider.__new__(GeminiProvider)
-    provider.settings = SimpleNamespace(gemini_model='gemini-3.8-flash', gemini_api_key='')
-    provider.client = SimpleNamespace(aio=SimpleNamespace(models=SlowModels()))
-    monkeypatch.setattr(providers, 'GEMINI_REQUEST_TIMEOUT_SECONDS', 0.005)
-    try:
-        asyncio.run(provider.generate('prompt'))
-    except GeminiTimeoutError as exc:
-        assert exc.gemini_code == 'TIMEOUT'
-        assert exc.retry_attempt == 1
-        assert _gemini_http_error(exc).status_code == 503
-    else:
-        raise AssertionError('generation should time out')
-    assert calls == 1
-
-
-def test_gemini_embedding_timeout_is_bounded(monkeypatch):
-    import types
-    import app.services.providers as providers
-    from app.services.providers import GeminiProvider, GeminiTimeoutError
-
-    class SlowModels:
-        async def embed_content(self, **kwargs): await asyncio.sleep(0.05)
-
-    genai = types.ModuleType('google.genai')
-    genai.types = SimpleNamespace(EmbedContentConfig=lambda **kwargs: kwargs)
-    google = types.ModuleType('google')
-    google.genai = genai
-    monkeypatch.setitem(sys.modules, 'google', google)
-    monkeypatch.setitem(sys.modules, 'google.genai', genai)
-    provider = GeminiProvider.__new__(GeminiProvider)
-    provider.settings = SimpleNamespace(gemini_embedding_model='test-embed', embedding_dimensions=1, gemini_api_key='')
-    provider.client = SimpleNamespace(aio=SimpleNamespace(models=SlowModels()))
-    monkeypatch.setattr(providers, 'GEMINI_REQUEST_TIMEOUT_SECONDS', 0.005)
-    try:
-        asyncio.run(provider.embed(['one']))
-    except GeminiTimeoutError as exc:
-        assert exc.operation == 'embedding'
-    else:
-        raise AssertionError('embedding should time out')
-
-
-def test_gemini_provider_logs_status_and_redacts_key(caplog):
-    from app.services.providers import GeminiProvider
-    provider = GeminiProvider.__new__(GeminiProvider)
-    provider.settings = SimpleNamespace(gemini_api_key='private-api-key')
-    error = SimpleNamespace(message='model unavailable; credential private-api-key', code=404, status='NOT_FOUND')
-    with caplog.at_level('ERROR'):
-        provider._log_failure('generation', 'gemini-test-model', error, retry_attempt=1)
-    assert '404' in caplog.text and 'NOT_FOUND' in caplog.text
-    assert 'gemini-test-model' in caplog.text
-    assert 'private-api-key' not in caplog.text
+def test_ingestion_retrieval_use_local_embedding_provider_by_default():
+    from app.services.providers import LocalEmbeddingProvider
+    assert isinstance(IngestionService(object()).embedder, LocalEmbeddingProvider)
+    assert isinstance(RetrievalService(object()).embedder, LocalEmbeddingProvider)
 
 
 def test_retrieval_sql_is_user_scoped_and_supports_cosine_distance():
     class Embedder:
-        async def embed(self, texts): return [[0.1] * 768]
+        async def embed(self, texts): return [[0.1] * 384]
     class Result:
         def all(self): return []
     class Session:
@@ -318,7 +192,7 @@ def test_retrieve_many_batches_all_embeddings_in_one_call():
 
         async def embed(self, texts):
             self.calls.append(texts)
-            return [[0.1] * 768 for _ in texts]
+            return [[0.1] * 384 for _ in texts]
 
     class Result:
         def all(self):
@@ -348,7 +222,7 @@ def test_retrieve_many_deduplicates_queries_before_embedding():
 
         async def embed(self, texts):
             self.calls.append(texts)
-            return [[0.1] * 768 for _ in texts]
+            return [[0.1] * 384 for _ in texts]
 
     class Result:
         def all(self):
@@ -378,7 +252,7 @@ def test_retrieve_remains_compatible_with_single_query():
 
         async def embed(self, texts):
             self.calls.append(texts)
-            return [[0.1] * 768]
+            return [[0.1] * 384]
 
     class Result:
         def all(self):
@@ -418,4 +292,4 @@ def test_conversation_owner_lookup_returns_not_found_for_other_user():
 def test_pgvector_column_dimensions_match_runtime_configuration():
     from app.core.config import get_settings
     from app.models.stage2 import DocumentChunk
-    assert DocumentChunk.__table__.c.embedding.type.dimensions == get_settings().embedding_dimensions == 768
+    assert DocumentChunk.__table__.c.embedding.type.dimensions == get_settings().embedding_dimensions == 384

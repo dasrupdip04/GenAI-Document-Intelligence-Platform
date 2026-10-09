@@ -11,7 +11,7 @@ from app.api import conversations as conversation_api
 from app.models.stage2 import Citation, Conversation, Message
 from app.models.user import User
 from app.schemas.conversation import QuestionCreate
-from app.services.providers import GeminiMalformedResponseError, GeminiProvider, GeminiProviderError
+from app.services.providers import MalformedProviderResponseError, ProviderError
 from app.services.rag_service import RAGService
 
 
@@ -83,14 +83,12 @@ def test_successful_message_persists_assistant_and_citation(monkeypatch):
 
 
 @pytest.mark.parametrize(('upstream_status', 'expected_status', 'expected_detail'), [
-    (429, 429, 'Gemini quota/rate limit reached.'),
-    (503, 503, 'Gemini is temporarily unavailable.'),
+    (429, 429, 'Groq quota/rate limit reached.'),
+    (503, 503, 'Groq is temporarily unavailable.'),
 ])
 def test_gemini_http_errors_are_mapped_without_fake_assistant(monkeypatch, upstream_status, expected_status, expected_detail):
-    failure = GeminiProviderError(operation='generation', model='gemini-3.8-flash',
-                                  message='upstream failure', upstream_http_status=upstream_status,
-                                  gemini_code='RESOURCE_EXHAUSTED' if upstream_status == 429 else 'UNAVAILABLE',
-                                  retry_attempt=1)
+    failure = ProviderError(provider='groq', operation='generation', model='openai/gpt-oss-120b',
+                            message='upstream failure', status=upstream_status, attempt=1)
     conversation, chunk, document, db, user = setup(monkeypatch, rag_error=failure)
     with pytest.raises(HTTPException) as exc:
         asyncio.run(conversation_api.ask(str(conversation.id), QuestionCreate(content='Question'), user, db))
@@ -103,7 +101,7 @@ def test_gemini_http_errors_are_mapped_without_fake_assistant(monkeypatch, upstr
 def test_malformed_query_expansion_is_not_silently_ignored():
     class LLM:
         async def generate(self, prompt): return 'not-json'
-    with pytest.raises(GeminiMalformedResponseError):
+    with pytest.raises(MalformedProviderResponseError):
         asyncio.run(RAGService(object(), LLM()).answer('user-1', 'question', [], ['doc-1']))
 
 
@@ -135,39 +133,43 @@ def test_delete_conversation_returns_not_found_for_unowned_id():
         asyncio.run(conversation_api.delete_conversation(str(uuid4()), User(id='user-1', email='user@example.invalid', role='user'), DeleteSession()))
 
 
-@pytest.mark.parametrize(('status_code', 'retry_expected'), [(429, 1), (503, 2)])
-def test_provider_retry_policy_does_not_retry_429(monkeypatch, status_code, retry_expected):
-    import app.services.providers as provider_module
-    calls = 0
+@pytest.mark.parametrize(('status_code', 'expected_calls'), [(429, 1), (503, 2)])
+def test_groq_retry_policy_is_bounded_and_skips_429(monkeypatch, status_code, expected_calls):
+    import app.services.providers as providers
+    from app.services.providers import GroqProvider
+    calls=0
 
-    class UpstreamError(Exception):
-        code = status_code
-        status = 'RESOURCE_EXHAUSTED' if status_code == 429 else 'UNAVAILABLE'
-        message = 'temporary provider failure'
-
-    class Models:
-        async def generate_content(self, **kwargs):
+    class Response:
+        def __init__(self, status): self.status_code = status
+        def json(self): return {'error': {'message': 'upstream error'}}
+    class Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return None
+        async def post(self, *args, **kwargs):
             nonlocal calls
             calls += 1
-            raise UpstreamError()
-
-    provider = GeminiProvider.__new__(GeminiProvider)
-    provider.settings = SimpleNamespace(gemini_model='gemini-3.8-flash', gemini_api_key='')
-    provider.client = SimpleNamespace(aio=SimpleNamespace(models=Models()))
-    async def no_wait(_seconds): return None
-    monkeypatch.setattr(provider_module.asyncio, 'sleep', no_wait)
-    with pytest.raises(GeminiProviderError) as exc:
-        asyncio.run(provider.generate('generic test prompt'))
-    assert calls == retry_expected
-    assert exc.value.upstream_http_status == status_code
-    assert exc.value.retry_attempt == retry_expected
+            return Response(status_code)
+    monkeypatch.setattr(providers.httpx, 'AsyncClient', lambda **kwargs: Client())
+    async def no_sleep(_): return None
+    monkeypatch.setattr(providers.asyncio, 'sleep', no_sleep)
+    provider=GroqProvider.__new__(GroqProvider)
+    provider.api_key='test-key'; provider.model='openai/gpt-oss-120b'
+    with pytest.raises(ProviderError):
+        asyncio.run(provider.generate('test prompt'))
+    assert calls == expected_calls
 
 
-def test_gemini_empty_response_is_reported_as_malformed(monkeypatch):
-    class Models:
-        async def generate_content(self, **kwargs): return SimpleNamespace(text=None)
-    provider = GeminiProvider.__new__(GeminiProvider)
-    provider.settings = SimpleNamespace(gemini_model='gemini-3.8-flash', gemini_api_key='')
-    provider.client = SimpleNamespace(aio=SimpleNamespace(models=Models()))
-    with pytest.raises(GeminiMalformedResponseError):
-        asyncio.run(provider.generate('prompt'))
+def test_groq_generation_parses_mocked_response(monkeypatch):
+    import app.services.providers as providers
+    from app.services.providers import GroqProvider
+    class Response:
+        status_code=200
+        def json(self): return {'choices': [{'message': {'content': 'answer'}}]}
+    class Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): return None
+        async def post(self, *args, **kwargs): return Response()
+    monkeypatch.setattr(providers.httpx, 'AsyncClient', lambda **kwargs: Client())
+    provider=GroqProvider.__new__(GroqProvider)
+    provider.api_key='test-key'; provider.model='openai/gpt-oss-120b'
+    assert asyncio.run(provider.generate('test prompt')) == 'answer'

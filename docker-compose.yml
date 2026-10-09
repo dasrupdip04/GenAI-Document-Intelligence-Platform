@@ -33,16 +33,19 @@ services:
       SUPABASE_JWKS_URL: ${SUPABASE_JWKS_URL}
       STORAGE_PATH: /app/storage/documents
       MAX_UPLOAD_SIZE_MB: 10
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.8-flash}
-      GEMINI_EMBEDDING_MODEL: ${GEMINI_EMBEDDING_MODEL:-gemini-embedding-001}
-      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-768}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-120b}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-384}
+      HF_HOME: /app/model-cache
       LOG_LEVEL: INFO
       ENVIRONMENT: development
     ports:
       - "8000:8000"
     volumes:
       - ./storage:/app/storage
+      - model_cache:/app/model-cache
 
 volumes:
   postgres_data:
+  model_cache:

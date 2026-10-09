@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.document import Document
 from app.models.stage2 import DocumentChunk, IngestionJob
 from app.services.extraction import DocumentExtractor, RecursiveChunker
-from app.services.providers import EmbeddingProvider, GeminiProvider
+from app.services.providers import EmbeddingProvider, LocalEmbeddingProvider
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ class IngestionService:
     def __init__(self, session: AsyncSession, embedder: EmbeddingProvider | None = None,
                  extractor: DocumentExtractor | None = None, chunker: RecursiveChunker | None = None) -> None:
         self.session = session
-        self.embedder = embedder or GeminiProvider()
+        self.embedder = embedder or LocalEmbeddingProvider()
         self.extractor = extractor or DocumentExtractor()
         self.chunker = chunker or RecursiveChunker()
 

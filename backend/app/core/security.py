@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import jwt
@@ -7,6 +8,8 @@ from jwt import PyJWKClient
 
 from app.core.config import get_settings
 from app.core.exceptions import AuthenticationError
+
+logger = logging.getLogger(__name__)
 
 
 def get_supabase_jwks_client() -> PyJWKClient:
@@ -28,6 +31,7 @@ def verify_supabase_jwt(token: str) -> dict[str, Any]:
         )
         return payload
     except Exception as exc:
+        logger.warning('Supabase JWT verification failed: %s', type(exc).__name__)
         raise AuthenticationError('Invalid or expired authentication token.') from exc
 
 

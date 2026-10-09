@@ -15,8 +15,7 @@ from app.models.user import User
 from app.schemas.conversation import (CitationRead, ConversationCreate, ConversationRead,
     ConversationDocumentAttach, ConversationDocumentRead, ConversationSummary, MessageRead, QuestionCreate)
 from app.services.rag_service import RAGService
-from app.services.providers import (GeminiConfigurationError, GeminiMalformedResponseError,
-    GeminiProviderError, GeminiTimeoutError)
+from app.services.providers import MalformedProviderResponseError, ProviderError
 from app.services.retrieval_service import RetrievalService
 
 router = APIRouter(prefix='/api/v1/conversations', tags=['conversations'])
@@ -117,14 +116,14 @@ async def ask(conversation_id: str, payload: QuestionCreate, user: User = Depend
                 Document.status == 'READY'))
         document_ids = list(attached_result.scalars().all())
         result = await RAGService(RetrievalService(db)).answer(user.id, payload.content, history, document_ids)
-    except GeminiProviderError as exc:
+    except ProviderError as exc:
         await db.rollback()
         logger.error(
-            'rag_provider_failure provider=%s operation=%s model=%s upstream_http_status=%s gemini_code=%s retry_attempt=%s sanitized_message=%s',
-            exc.provider, exc.operation, exc.model, exc.upstream_http_status, exc.gemini_code,
+            'rag_provider_failure provider=%s operation=%s model=%s upstream_http_status=%s retry_attempt=%s sanitized_message=%s',
+            exc.provider, exc.operation, exc.model, exc.upstream_http_status,
             exc.retry_attempt, exc.safe_message,
         )
-        raise _gemini_http_error(exc) from exc
+        raise _provider_http_error(exc) from exc
     except Exception as exc:
         await db.rollback()
         logger.error('rag_pipeline_failure conversation_id=%s error_type=%s', conversation_id, type(exc).__name__)
@@ -164,22 +163,19 @@ async def _message_citations(db: AsyncSession, message_id) -> list[CitationRead]
                          page_number=c.page_number, relevance_score=c.relevance_score) for c, d in result.all()]
 
 
-def _gemini_http_error(error: GeminiProviderError) -> HTTPException:
+def _provider_http_error(error: ProviderError) -> HTTPException:
     status = error.upstream_http_status
-    if isinstance(error, GeminiConfigurationError):
-        return HTTPException(status_code=500, detail='Gemini is not configured on the server.')
-    if isinstance(error, GeminiTimeoutError):
-        return HTTPException(status_code=503, detail='Gemini is taking too long to respond. Please try again.')
+    provider = error.provider.capitalize()
     if status == 429:
-        return HTTPException(status_code=429, detail='Gemini quota/rate limit reached. Please try again later.')
+        return HTTPException(status_code=429, detail=f'{provider} quota/rate limit reached. Please try again later.')
     if status == 503 or (status is not None and status >= 500):
-        return HTTPException(status_code=503, detail='Gemini is temporarily unavailable. Please try again.')
+        return HTTPException(status_code=503, detail=f'{provider} is temporarily unavailable. Please try again.')
     if status in {401, 403}:
-        return HTTPException(status_code=502, detail='Gemini authentication or permission configuration is invalid.')
+        return HTTPException(status_code=502, detail=f'{provider} authentication or permission configuration is invalid.')
     if status == 404:
-        return HTTPException(status_code=502, detail='The configured Gemini model is unavailable.')
-    if isinstance(error, GeminiMalformedResponseError):
-        return HTTPException(status_code=502, detail='Gemini returned an invalid response.')
+        return HTTPException(status_code=502, detail=f'The configured {provider} model is unavailable.')
+    if isinstance(error, MalformedProviderResponseError) or status == 200:
+        return HTTPException(status_code=502, detail=f'{provider} returned an invalid response.')
     if status is None:
-        return HTTPException(status_code=500, detail='Gemini provider configuration failed.')
-    return HTTPException(status_code=502, detail='Gemini rejected the request configuration.')
+        return HTTPException(status_code=500, detail=f'{provider} provider configuration failed: {error.safe_message}')
+    return HTTPException(status_code=502, detail=f'{provider} rejected the request configuration.')
